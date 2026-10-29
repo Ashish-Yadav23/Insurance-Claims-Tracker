@@ -1,0 +1,274 @@
+# API Contract & Endpoint Specification
+
+## 1. API Standards & Conventions
+
+- **Base URL Prefix**: `/api/v1`
+- **Transport**: JSON (`application/json`) over HTTPS
+- **Authentication**: JWT Bearer Token in `Authorization: Bearer <token>` header
+- **Date Format**: ISO 8601 UTC string (e.g., `2026-10-30T12:00:00Z`)
+- **Error Standard**: RFC 7807 `ProblemDetails`
+
+### Health Check Endpoint (Phase 1 Baseline)
+- **Route**: `GET /health`
+- **Authorization**: Public (Anonymous)
+- **Responses**:
+  - `200 OK`:
+    ```json
+    {
+      "status": "Healthy",
+      "timestamp": "2026-10-30T00:30:00Z"
+    }
+    ```
+
+### Standard Error Response Format (RFC 7807)
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc7231#section-6.5.1",
+  "title": "Validation Failed",
+  "status": 400,
+  "detail": "One or more validation errors occurred.",
+  "instance": "/api/v1/claims",
+  "errors": {
+    "ClaimAmount": ["Claim amount cannot exceed policy coverage amount ($25,000.00)."],
+    "IncidentDate": ["Incident date must be within policy coverage period."]
+  }
+}
+```
+
+---
+
+## 2. Authentication & Profile Endpoints
+
+### 2.1 Register Customer
+Registers a new customer account.
+- **Route**: `POST /api/v1/auth/register`
+- **Authorization**: Public (Anonymous)
+- **Security Rule**: The registration contract **does not accept a `role` field**. The server unconditionally sets `Role = UserRole.Customer`. Callers cannot elevate themselves to `Admin`.
+- **Request Body**:
+  ```json
+  {
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "password": "SecurePassword123!"
+  }
+  ```
+- **Responses**:
+  - `201 Created`:
+    ```json
+    {
+      "id": 1,
+      "name": "Jane Doe",
+      "email": "jane.doe@example.com",
+      "role": "Customer",
+      "createdAt": "2026-10-30T00:30:00Z"
+    }
+    ```
+  - `400 Bad Request`: Password complexity failure or invalid email.
+  - `409 Conflict`: Email already registered.
+
+### 2.2 Login
+Authenticates an existing user and returns a signed JWT.
+- **Route**: `POST /api/v1/auth/login`
+- **Authorization**: Public (Anonymous)
+- **Request Body**:
+  ```json
+  {
+    "email": "jane.doe@example.com",
+    "password": "SecurePassword123!"
+  }
+  ```
+- **Responses**:
+  - `200 OK`:
+    ```json
+    {
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "expiresAt": "2026-10-30T08:30:00Z",
+      "user": {
+        "id": 1,
+        "name": "Jane Doe",
+        "email": "jane.doe@example.com",
+        "role": "Customer"
+      }
+    }
+    ```
+  - `401 Unauthorized`: Invalid credentials.
+
+### 2.3 Get Current Profile
+Returns profile details for the currently authenticated user.
+- **Route**: `GET /api/v1/auth/me`
+- **Authorization**: Customer or Admin
+- **Responses**:
+  - `200 OK`: Returns User DTO.
+  - `401 Unauthorized`: Missing or expired token.
+
+---
+
+## 3. Policy Management Endpoints
+
+### 3.1 List Policies
+Returns active insurance policies.
+- **Route**: `GET /api/v1/policies`
+- **Authorization & Ownership**:
+  - **Customer**: Strictly filtered on the server to `CustomerId == currentUserId`.
+  - **Admin**: Returns all policies with optional query filters (`?customerId=1&policyType=Auto`).
+- **Responses**:
+  - `200 OK`: Array of Policy DTOs.
+
+### 3.2 Get Policy by ID
+Retrieves details of a single policy.
+- **Route**: `GET /api/v1/policies/{id}`
+- **Authorization & Ownership**:
+  - **Customer**: Strictly allowed only if `policy.CustomerId == currentUserId`. Otherwise returns `404 Not Found`.
+  - **Admin**: Allowed for any valid policy ID.
+- **Responses**:
+  - `200 OK`: Policy details DTO.
+  - `404 Not Found`: Policy does not exist or user lacks ownership.
+
+### 3.3 Create Policy (Admin Only)
+Issues a new insurance policy for a customer.
+- **Route**: `POST /api/v1/policies`
+- **Authorization**: Admin only (`[Authorize(Roles = "Admin")]`)
+- **Request Body**:
+  ```json
+  {
+    "customerId": 1,
+    "policyType": "Auto",
+    "coverageAmount": 50000.00,
+    "startDate": "2026-01-01T00:00:00Z",
+    "endDate": "2026-12-31T23:59:59Z"
+  }
+  ```
+- **Responses**:
+  - `201 Created`: Created Policy DTO with generated `policyNumber`.
+  - `400 Bad Request`: `EndDate <= StartDate` or `CoverageAmount <= 0`.
+  - `404 Not Found`: `CustomerId` does not exist.
+
+---
+
+## 4. Claims Endpoints
+
+### 4.1 List Claims
+Returns claims based on caller role.
+- **Route**: `GET /api/v1/claims`
+- **Authorization & Ownership**:
+  - **Customer**: Server queries only claims where `claim.Policy.CustomerId == currentUserId`.
+  - **Admin**: Queries all claims with optional status/policy filters.
+- **Responses**:
+  - `200 OK`: Array of Claim summary DTOs.
+
+### 4.2 Get Claim by ID
+Retrieves full details of a claim, including its history audit log.
+- **Route**: `GET /api/v1/claims/{id}`
+- **Authorization & Ownership**:
+  - **Customer**: Allowed only if `claim.Policy.CustomerId == currentUserId`. Otherwise returns `404 Not Found`.
+  - **Admin**: Allowed for all claims.
+- **Responses**:
+  - `200 OK`: Claim Details DTO with embedded `history` array.
+  - `404 Not Found`: Claim not found or resource ownership validation failed.
+
+### 4.3 Submit Claim (Customer Only)
+Files a new claim against an active policy.
+- **Route**: `POST /api/v1/claims`
+- **Authorization**: Customer only (`[Authorize(Roles = "Customer")]`)
+- **Server Ownership Check**: The server verifies that the specified `policyId` belongs to `currentUserId` before evaluating business rules.
+- **Request Body**:
+  ```json
+  {
+    "policyId": 101,
+    "claimAmount": 1200.00,
+    "incidentDate": "2026-10-15T14:30:00Z",
+    "description": "Fender bender in shopping mall parking lot. Minor bumper crack."
+  }
+  ```
+- **Responses**:
+  - `201 Created`: Created Claim DTO with status `Submitted`. Automatically writes initial append-only `ClaimHistory` entry.
+  - `400 Bad Request`: Incident date outside policy window, or claim amount exceeds coverage.
+  - `404 Not Found`: Policy not found or does not belong to customer.
+
+---
+
+## 5. Admin Claim Workflow Endpoints
+
+### 5.1 Begin Review
+Transitions a claim from `Submitted` to `UnderReview`.
+- **Route**: `POST /api/v1/claims/{id}/review`
+- **Authorization**: Admin only
+- **Request Body**:
+  ```json
+  {
+    "note": "Assigned to claims adjuster for documentation verification."
+  }
+  ```
+- **Responses**:
+  - `200 OK`: Updated Claim DTO.
+  - `400 Bad Request`: Claim is not in `Submitted` status.
+  - `409 Conflict`: Concurrency conflict (claim was updated concurrently by another admin).
+
+### 5.2 Decide Claim (Approve / Reject)
+Transitions a claim from `UnderReview` to `Approved` or `Rejected`.
+- **Route**: `POST /api/v1/claims/{id}/decision`
+- **Authorization**: Admin only
+- **Request Body**:
+  ```json
+  {
+    "decision": "Approved", // or "Rejected"
+    "reviewNote": "Repair estimate verified with authorized mechanic shop."
+  }
+  ```
+- **Responses**:
+  - `200 OK`: Updated Claim DTO.
+  - `400 Bad Request`: Missing mandatory review note or invalid status transition.
+  - `409 Conflict`: Concurrency conflict.
+
+### 5.3 Record Payout
+Transitions an `Approved` claim to `Paid`.
+- **Route**: `POST /api/v1/claims/{id}/payout`
+- **Authorization**: Admin only
+- **Request Body**:
+  ```json
+  {
+    "payoutReference": "ACH-TRANSFER-99210",
+    "note": "Full payment disbursed to policyholder bank account."
+  }
+  ```
+- **Responses**:
+  - `200 OK`: Updated Claim DTO with status `Paid`.
+  - `400 Bad Request`: Claim is not in `Approved` status.
+  - `409 Conflict`: Concurrency conflict (e.g. payout was already recorded).
+
+### 5.4 AI Advisory Triage (LLM Assistance)
+Generates AI-suggested category and narrative summary for admin assistance.
+- **Route**: `POST /api/v1/claims/{id}/ai-triage`
+- **Authorization**: Admin only (implemented in Phase 7 after baseline tests pass)
+- **Responses**:
+  - `200 OK`:
+    ```json
+    {
+      "claimId": 501,
+      "suggestedCategory": "Automotive - Minor Property Damage",
+      "summary": "Low-impact parking lot collision. Damage limited to bumper. Amount ($1,200) is well within $50,000 policy limit.",
+      "riskAssessment": "Low Risk",
+      "recommendedAction": "Standard documentation check and approve."
+    }
+    ```
+  - `404 Not Found`: Claim does not exist.
+  - `502 Bad Gateway`: AI upstream provider failure (handled gracefully without crashing application).
+
+---
+
+## 6. Audit Trail Endpoints
+
+### 6.1 Get Claim Audit History
+Retrieves the immutable audit trail of state transitions and review notes.
+- **Route**: `GET /api/v1/claims/{id}/history`
+- **Authorization & Ownership**: Customer (own claim) or Admin
+- **Responses**:
+  - `200 OK`: Array of `ClaimHistory` records.
+
+---
+
+## 7. Related Documentation Links
+- [System Architecture Overview](ARCHITECTURE.md)
+- [Database Schema & State Transitions](DATABASE_SCHEMA.md)
+- [Security Architecture & Deployment Guide](SECURITY_AND_DEPLOYMENT.md)
+- [Phased Implementation Plan](IMPLEMENTATION_PLAN.md)
