@@ -90,7 +90,7 @@ Stores insurance contracts belonging to registered customers.
 | `IsActive` | `BIT` | No | Administrative active status flag (Default: `1`) |
 | `CreatedAt` | `DATETIMEOFFSET` | No | Creation timestamp (UTC) |
 
-- **Foreign Key**: `FK_Policies_Users_CustomerId` (`CustomerId` -> `Users.Id`)
+- **Foreign Key**: `FK_Policies_Users_CustomerId` (`CustomerId` -> `Users.Id`, `DeleteBehavior.Restrict`)
 - **Indexes**:
   - `UX_Policies_PolicyNumber` (Unique)
   - `IX_Policies_CustomerId` (Fast lookup of customer policies)
@@ -101,7 +101,7 @@ Records individual claims filed by customers against active policies.
 | Column | Type | Nullable | Description / Constraints |
 | :--- | :--- | :--- | :--- |
 | `Id` | `INT` | No | Primary Key, `IDENTITY(1,1)` |
-| `PolicyId` | `INT` | No | Foreign Key to `Policies(Id)`. **Delete Rule: RESTRICT** |
+| `PolicyId` | `INT` | No | Foreign Key to `Policies(Id)`. **Delete Rule: RESTRICT / NO ACTION** |
 | `ClaimAmount` | `DECIMAL(18,2)`| No | Requested payout amount. Check constraint `ClaimAmount > 0` |
 | `IncidentDate` | `DATETIMEOFFSET` | No | Incident timestamp |
 | `Description` | `NVARCHAR(2000)`| No | Detailed claim narrative |
@@ -112,7 +112,7 @@ Records individual claims filed by customers against active policies.
 | `CreatedAt` | `DATETIMEOFFSET` | No | Submission timestamp (UTC) |
 | `UpdatedAt` | `DATETIMEOFFSET` | Yes | Last status update timestamp (UTC) |
 
-- **Foreign Key**: `FK_Claims_Policies_PolicyId` (`PolicyId` -> `Policies.Id`)
+- **Foreign Key**: `FK_Claims_Policies_PolicyId` (`PolicyId` -> `Policies.Id`, `DeleteBehavior.Restrict`)
 - **Indexes**:
   - `IX_Claims_PolicyId` (Index on foreign key for joins)
   - `IX_Claims_Status` (Filtered / indexed for admin triage queue queries)
@@ -124,7 +124,7 @@ Immutable audit ledger of every status transition and administrator review note.
 | Column | Type | Nullable | Description / Constraints |
 | :--- | :--- | :--- | :--- |
 | `Id` | `INT` | No | Primary Key, `IDENTITY(1,1)` |
-| `ClaimId` | `INT` | No | Foreign Key to `Claims(Id)`. **Delete Rule: CASCADE** |
+| `ClaimId` | `INT` | No | Foreign Key to `Claims(Id)`. **Delete Rule: RESTRICT / NO ACTION** |
 | `PreviousStatus`| `INT` | Yes | Prior status (`NULL` on initial submission) |
 | `NewStatus` | `INT` | No | New status reached |
 | `ChangedById` | `INT` | No | Foreign Key to `Users(Id)` (the user or admin who triggered the change) |
@@ -132,10 +132,11 @@ Immutable audit ledger of every status transition and administrator review note.
 | `ReviewNote` | `NVARCHAR(1000)`| Yes | Mandatory for `Approved` and `Rejected` statuses; optional otherwise |
 
 - **Foreign Keys**:
-  - `FK_ClaimHistory_Claims_ClaimId` (`ClaimId` -> `Claims.Id` with `ON DELETE CASCADE`)
-  - `FK_ClaimHistory_Users_ChangedById` (`ChangedById` -> `Users.Id` with `ON DELETE NO ACTION`)
+  - `FK_ClaimHistory_Claims_ClaimId` (`ClaimId` -> `Claims.Id`, `DeleteBehavior.Restrict`)
+  - `FK_ClaimHistory_Users_ChangedById` (`ChangedById` -> `Users.Id`, `DeleteBehavior.Restrict`)
 - **Indexes**:
   - `IX_ClaimHistory_ClaimId` (Optimized for loading audit history by claim)
+  - `IX_ClaimHistory_ChangedById` (Lookup of audits authored by user)
 
 ---
 
@@ -144,11 +145,14 @@ Immutable audit ledger of every status transition and administrator review note.
 A key design principle is distinguishing between **single-row database check constraints** and **multi-entity business logic invariants**:
 
 1. **Database Check Constraints (Physical / Row-Level)**:
-   - `CoverageAmount > 0`
-   - `ClaimAmount > 0`
-   - `EndDate > StartDate`
-   - `Users.Role IN (1, 2)`
-   - `Claims.Status IN (1, 2, 3, 4, 5)`
+   - `CoverageAmount > 0` (`CK_Policies_CoverageAmount`)
+   - `ClaimAmount > 0` (`CK_Claims_ClaimAmount`)
+   - `EndDate > StartDate` (`CK_Policies_EndDate`)
+   - `Users.Role IN (1, 2)` (`CK_Users_Role`)
+   - `Policies.PolicyType IN (1, 2, 3, 4)` (`CK_Policies_PolicyType`)
+   - `Claims.Status IN (1, 2, 3, 4, 5)` (`CK_Claims_Status`)
+   - `ClaimHistory.PreviousStatus IS NULL OR PreviousStatus IN (1, 2, 3, 4, 5)` (`CK_ClaimHistory_PreviousStatus`)
+   - `ClaimHistory.NewStatus IN (1, 2, 3, 4, 5)` (`CK_ClaimHistory_NewStatus`)
    - Enforced directly by SQL Server via EF Core table configurations to guarantee data integrity against rogue scripts or raw SQL migrations.
 
 2. **Application / Business Logic Invariants (Logical / Multi-Entity)**:
@@ -158,10 +162,10 @@ A key design principle is distinguishing between **single-row database check con
    - State transition rules (e.g. from `UnderReview` to `Approved`).
    - Enforced cleanly in Application services and Domain models, returning RFC 7807 validation errors.
 
-3. **Append-Only Immutability for ClaimHistory**:
+3. **Append-Only Immutability for ClaimHistory & Restrictive Delete Behaviors**:
    - `ClaimHistory` is strictly append-only through application operations.
    - The application layer exposes no `Update` or `Delete` methods for audit records.
-   - Every status transition atomically inserts a new `ClaimHistory` row in the same transaction that updates `Claims.Status`.
+   - All foreign keys utilize `DeleteBehavior.Restrict` (`ON DELETE NO ACTION` in SQL Server). Deleting a user, policy, or claim cannot silently destroy claims or audit history.
 
 ---
 
@@ -206,7 +210,45 @@ stateDiagram-v2
 
 ---
 
-## 5. Related Documentation Links
+## 5. Applied Migrations & Migration CLI Commands
+
+The initial migration was created using the `dotnet-ef` 10.0.14 tool manifest and applied to the local SQL Server LocalDB instance `(localdb)\MSSQLLocalDB` targeting database `InsuranceClaimsTrackerDb`.
+
+### Migration Files
+- `src/InsuranceClaimsTracker.Infrastructure/Persistence/Migrations/20261030155657_InitialCreate.cs`
+- `src/InsuranceClaimsTracker.Infrastructure/Persistence/Migrations/ApplicationDbContextModelSnapshot.cs`
+
+### Commands Executed
+```bash
+# Add initial migration
+dotnet ef migrations add InitialCreate \
+  --project src/InsuranceClaimsTracker.Infrastructure/InsuranceClaimsTracker.Infrastructure.csproj \
+  --startup-project src/InsuranceClaimsTracker.Api/InsuranceClaimsTracker.Api.csproj \
+  --output-dir Persistence/Migrations
+
+# List migrations
+dotnet ef migrations list \
+  --project src/InsuranceClaimsTracker.Infrastructure/InsuranceClaimsTracker.Infrastructure.csproj \
+  --startup-project src/InsuranceClaimsTracker.Api/InsuranceClaimsTracker.Api.csproj
+
+# Apply migration to LocalDB
+dotnet ef database update \
+  --project src/InsuranceClaimsTracker.Infrastructure/InsuranceClaimsTracker.Infrastructure.csproj \
+  --startup-project src/InsuranceClaimsTracker.Api/InsuranceClaimsTracker.Api.csproj
+```
+
+---
+
+## 6. Seed Data Policy Decision
+
+In strict accordance with production security principles:
+1. **No Plaintext or Fabricated Hashes**: Users require cryptographically secure password hashes with per-user salt and iteration standards. Because PBKDF2 password hashing is formally implemented in Phase 3, seeding user accounts with fabricated hashes or plaintext passwords during Phase 2 was deliberately excluded.
+2. **Referential Integrity Cascades**: Policies, Claims, and ClaimHistory entries require valid foreign key references (`CustomerId`, `PolicyId`, `ChangedById`).
+3. **Phase 3 Seed Roadmap**: Demo customer, administrator, policy, and claim datasets will be provisioned in Phase 3 using the production `IPasswordHasher` service.
+
+---
+
+## 7. Related Documentation Links
 - [System Architecture Overview](ARCHITECTURE.md)
 - [API Contract & Endpoint Specifications](API_CONTRACT.md)
 - [Security Architecture & Deployment Guide](SECURITY_AND_DEPLOYMENT.md)

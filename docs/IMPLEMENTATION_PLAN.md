@@ -53,47 +53,55 @@ dotnet test tests/InsuranceClaimsTracker.UnitTests
 
 ---
 
-## Phase 2: EF Core Infrastructure, Database Configurations & Migrations
+## Phase 2: EF Core Infrastructure, Database Configurations & Migrations [Completed]
 
 ### Goal
-Configure Entity Framework Core with SQL Server, define table configurations with precise column constraints, SQL check constraints, `RowVersion` concurrency tokens, seed data, and generate the initial migration.
+Configure Entity Framework Core with SQL Server, define table configurations with precise column constraints, SQL check constraints, `RowVersion` concurrency tokens, and generate and apply the initial migration to LocalDB.
 
 ### Tasks
-1. Add EF Core NuGet packages to `Infrastructure`:
-   - `Microsoft.EntityFrameworkCore.SqlServer`
-   - `Microsoft.EntityFrameworkCore.Design`
-2. Define `IApplicationDbContext` in `Application` and implement it in `Infrastructure.Data.ApplicationDbContext`.
+1. Add EF Core 10.0.14 NuGet packages:
+   - `Microsoft.EntityFrameworkCore` in `Application`
+   - `Microsoft.EntityFrameworkCore.SqlServer` in `Infrastructure`
+   - `Microsoft.EntityFrameworkCore.Design` in `Infrastructure` and `Api`
+   - Local `dotnet-ef` tool manifest installed at version `10.0.14`
+2. Define `IApplicationDbContext` in `Application/Common/Interfaces/IApplicationDbContext.cs` and implement it in `Infrastructure/Persistence/ApplicationDbContext.cs`.
 3. Implement EF Core Fluent API Configurations (`IEntityTypeConfiguration<T>`):
    - Primary keys and identity columns.
    - Column types and lengths (`NVARCHAR(100)`, `NVARCHAR(256)`, `NVARCHAR(2000)`).
    - Decimal precision: `decimal(18,2)` for `CoverageAmount` and `ClaimAmount`.
    - SQL check constraints for individual-row invariants:
-     - `CoverageAmount > 0`
-     - `ClaimAmount > 0`
-     - `EndDate > StartDate`
-     - `Role IN (1, 2)`
-     - `Status IN (1, 2, 3, 4, 5)`
-   - Foreign keys and delete rules:
-     - `Policies.CustomerId` -> `Users.Id` (`ON DELETE RESTRICT`)
-     - `Claims.PolicyId` -> `Policies.Id` (`ON DELETE RESTRICT`)
-     - `ClaimHistory.ClaimId` -> `Claims.Id` (`ON DELETE CASCADE`)
-     - `ClaimHistory.ChangedById` -> `Users.Id` (`ON DELETE NO ACTION`)
+     - `CoverageAmount > 0` (`CK_Policies_CoverageAmount`)
+     - `ClaimAmount > 0` (`CK_Claims_ClaimAmount`)
+     - `EndDate > StartDate` (`CK_Policies_EndDate`)
+     - `Role IN (1, 2)` (`CK_Users_Role`)
+     - `PolicyType IN (1, 2, 3, 4)` (`CK_Policies_PolicyType`)
+     - `Status IN (1, 2, 3, 4, 5)` (`CK_Claims_Status`)
+     - `PreviousStatus IS NULL OR PreviousStatus IN (1, 2, 3, 4, 5)` (`CK_ClaimHistory_PreviousStatus`)
+     - `NewStatus IN (1, 2, 3, 4, 5)` (`CK_ClaimHistory_NewStatus`)
+   - Foreign keys and restrictive delete rules (`DeleteBehavior.Restrict`):
+     - `Policies.CustomerId` -> `Users.Id`
+     - `Claims.PolicyId` -> `Policies.Id`
+     - `ClaimHistory.ClaimId` -> `Claims.Id`
+     - `ClaimHistory.ChangedById` -> `Users.Id`
    - Concurrency token on `Claims`: `.IsRowVersion()` on `RowVersion`.
-4. Configure development database seed data (default Admin account, sample customers, sample policies).
-5. Generate the initial EF Core migration (`InitialCreate`).
-6. Implement unit tests verifying entity configuration mappings and constraint definitions.
+4. Configure development connection string in `appsettings.Development.json` for `(localdb)\MSSQLLocalDB`.
+5. Generate the initial EF Core migration (`20261030155657_InitialCreate`) and apply to `InsuranceClaimsTrackerDb`.
+6. Implement unit tests in `InsuranceClaimsTracker.UnitTests/Infrastructure/ApplicationDbContextModelTests.cs` verifying model metadata, constraints, precision, and delete behaviors without EF InMemory provider.
 
 ### Acceptance Criteria
-- Migration compiles cleanly without warnings.
-- `dotnet ef database update` succeeds on local SQL Server / LocalDB.
+- Migration compiles cleanly without warnings or errors.
+- `dotnet ef database update` succeeds on local SQL Server LocalDB (`InsuranceClaimsTrackerDb`).
 - Generated database schema includes all unique indexes, foreign keys, and SQL check constraints.
+- Seed data policy safely defers user/policy/claim demo data to Phase 3 when PBKDF2 password hashing is available.
+- All unit and integration test suites pass (38 passed, 0 failed).
 
 ### Verification Commands
 ```bash
-dotnet build
-dotnet test tests/InsuranceClaimsTracker.UnitTests
-dotnet ef migrations add InitialCreate --project src/InsuranceClaimsTracker.Infrastructure --startup-project src/InsuranceClaimsTracker.Api
-dotnet ef database update --project src/InsuranceClaimsTracker.Infrastructure --startup-project src/InsuranceClaimsTracker.Api
+dotnet restore InsuranceClaimsTracker.sln
+dotnet build InsuranceClaimsTracker.sln
+dotnet test InsuranceClaimsTracker.sln
+dotnet ef migrations list --project src/InsuranceClaimsTracker.Infrastructure/InsuranceClaimsTracker.Infrastructure.csproj --startup-project src/InsuranceClaimsTracker.Api/InsuranceClaimsTracker.Api.csproj
+dotnet ef database update --project src/InsuranceClaimsTracker.Infrastructure/InsuranceClaimsTracker.Infrastructure.csproj --startup-project src/InsuranceClaimsTracker.Api/InsuranceClaimsTracker.Api.csproj
 ```
 
 ---
