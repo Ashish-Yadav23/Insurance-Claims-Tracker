@@ -115,19 +115,57 @@ flowchart TD
 - **Dependencies**: `Application`, `Infrastructure`.
 - **Contents**:
   - **Composition & Startup**:
-    - `Program.cs`: Wires up DI services from `Application` and `Infrastructure`, configures health checks (`/health`), OpenAPI/Swagger with JWT support, CORS, and rate limiting.
+    - `Program.cs`: Wires up DI services from `Application` and `Infrastructure`, configures ProblemDetails services, health checks (`/health`), OpenAPI/Swagger with JWT support, and standard RFC 7807 model validation failure responses.
   - **Controllers**:
-    - `AuthController`: Registration and login endpoints.
+    - `AuthController`: Registration and login endpoints returning standardized ProblemDetails on failure.
     - `PoliciesController`: Policy management endpoints.
     - `ClaimsController`: Customer claim submission and query endpoints.
     - `AdminClaimsController`: Admin review, decision, payout, and AI triage endpoints.
-  - **Middleware**:
-    - `ExceptionHandlingMiddleware`: Translates domain exceptions into RFC 7807 `ProblemDetails` JSON responses, including `409 Conflict` for concurrency errors.
-    - `RequestLoggingMiddleware`: Logs HTTP operations and timing.
+  - **Middleware & Extensions**:
+    - `ExceptionHandlingMiddleware`: Centralized pipeline exception handler mapping domain, validation, concurrency, and unexpected errors to RFC 7807 `ProblemDetails` JSON responses with correlation `traceId`.
+    - `ApiResultExtensions`: Helper methods transforming `ServiceResult<T>` and `AuthResult<T>` into RFC 7807 `ProblemDetails` responses.
 
 ---
 
-## 4. Architectural Decision Records (ADRs) & Interview Defense
+## 4. Cross-Cutting Middleware Pipeline & Exception Architecture
+
+### 4.1 Middleware Pipeline Execution Order
+The ASP.NET Core request pipeline in `InsuranceClaimsTracker.Api/Program.cs` is strictly sequenced:
+
+1. **`ExceptionHandlingMiddleware`**: First middleware in the pipeline, ensuring any unhandled exception across downstream middleware or controllers is intercepted, logged with diagnostic metadata, and mapped to an RFC 7807 `ProblemDetails` payload without exposing sensitive internal details or stack traces.
+2. **Swagger / OpenAPI (`UseSwagger`, `UseSwaggerUI`)**: Enabled during Development at `/swagger/index.html` and `/swagger/v1/swagger.json`.
+3. **HTTPS Redirection (`UseHttpsRedirection`)**: Enforces secure transport.
+4. **Authentication (`UseAuthentication`)**: Validates JWT bearer tokens and establishes `ClaimsPrincipal` prior to authorization checks.
+5. **Authorization (`UseAuthorization`)**: Evaluates role-based policies (`Customer`, `Admin`).
+6. **Health Checks (`MapHealthChecks("/health")`)**: Lightweight diagnostic endpoint returning service health status and UTC timestamp.
+7. **Controllers (`MapControllers`)**: Routes incoming requests to target controllers with automatic RFC 7807 model validation.
+
+### 4.2 Centralized Exception Mapping Matrix
+| Exception Type | HTTP Status | Response Title | Client Safe Message / Behavior |
+| :--- | :---: | :--- | :--- |
+| `CoverageExceededException` | `400 Bad Request` | Bad Request | Domain limit violation message |
+| `PolicyExpiredException` | `400 Bad Request` | Bad Request | Policy coverage window error |
+| `InvalidClaimStateException` | `400 Bad Request` | Bad Request | Invalid lifecycle state transition |
+| `DomainException` | `400 Bad Request` | Bad Request | Domain invariant rule violation message |
+| `ValidationException` / `ArgumentException` | `400 Bad Request` | Bad Request | Input validation error |
+| `KeyNotFoundException` | `404 Not Found` | Not Found | Resource not found |
+| `UnauthorizedResourceAccessException` | `404 Not Found` | Not Found | Prevents resource enumeration across tenants (BOLA defense) |
+| `DbUpdateConcurrencyException` | `409 Conflict` | Conflict | Optimistic locking collision: resource was modified |
+| `DbUpdateException` (Known unique constraint 2601/2627) | `409 Conflict` | Conflict | Duplicate email or policy number violation |
+| Other `DbUpdateException` (e.g. FK, check constraint) | `500 Internal Server Error` | Internal Server Error | Generic client message; full exception logged |
+| Unexpected `Exception` | `500 Internal Server Error` | Internal Server Error | "An unexpected error occurred while processing your request. Please try again later." |
+
+### 4.3 Testing Architecture & Database Isolation
+The testing suite is partitioned into two specialized test projects:
+- **`InsuranceClaimsTracker.UnitTests`** (167 tests): Fast, isolated tests for domain entities, invariants, state transitions, password hashing, JWT generation, and `ExceptionHandlingMiddleware` mapping logic.
+- **`InsuranceClaimsTracker.IntegrationTests`** (57 tests): End-to-end HTTP pipeline tests using `WebApplicationFactory<Program>`:
+  - **In-Memory Isolated Factory (`CustomWebApplicationFactory`)**: Used for high-speed authentication, endpoint routing, and BOLA regression tests.
+  - **Native SQL Server Factory (`SqlServerWebApplicationFactory`)**: Used for deterministic concurrency regression tests and complete end-to-end business lifecycle verification against real SQL Server LocalDB with native `rowversion` / `timestamp` columns.
+  - **Database Isolation Guarantee**: Never executes destructive scripts or teardown against the development database `InsuranceClaimsTrackerDb`. Dedicated isolated databases (`InsuranceClaimsTracker_ConcurrencyTest_<guid>`) are automatically provisioned with EF Core migrations and dropped on test completion.
+
+---
+
+## 5. Architectural Decision Records (ADRs) & Interview Defense
 
 ### Decision 1: Why Establish the API Project in Phase 1?
 - **Rationale**: Deferring the API layer until late in the development cycle creates a "big bang" integration where routing, DI registration, configuration, and JSON serialization bugs surface simultaneously. Initializing `InsuranceClaimsTracker.Api` as a buildable project with `/health` and Swagger in Phase 1 establishes the composition root early, allowing each phase to deliver vertical slices with working endpoints and tests.

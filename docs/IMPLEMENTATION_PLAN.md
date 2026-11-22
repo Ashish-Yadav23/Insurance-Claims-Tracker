@@ -230,38 +230,50 @@ dotnet test tests/InsuranceClaimsTracker.UnitTests --filter "FullyQualifiedName~
 
 ---
 
-## Phase 6: Cross-Cutting Middleware, Integration, Concurrency & Regression Testing
+## Phase 6: Cross-Cutting Middleware, Integration, Concurrency & Regression Testing (Completed)
 
 ### Goal
 Implement global RFC 7807 exception handling middleware, request logging, and build an end-to-end automated integration and regression test suite using `WebApplicationFactory`.
 
-### Tasks
-1. Implement `ExceptionHandlingMiddleware` in `Api`:
-   - Maps `ValidationException` -> 400 Bad Request
-   - Maps `NotFoundException` -> 404 Not Found
-   - Maps `UnauthorizedResourceAccessException` -> 404 Not Found (or 403)
-   - Maps `InvalidClaimStateException` -> 400 Bad Request
-   - Maps `DbUpdateConcurrencyException` -> 409 Conflict
-   - Unhandled exceptions -> 500 Internal Server Error (without leaking stack traces in production).
-2. Configure `InsuranceClaimsTracker.IntegrationTests`:
-   - Set up custom `WebApplicationFactory<Program>` with in-memory database or SQLite.
-3. Write comprehensive integration tests:
-   - Auth flow: register customer, verify role is Customer, login, retrieve profile.
-   - RBAC & BOLA defense: Customer A cannot access Customer B's policy or claim via GET routes.
-   - Claim lifecycle flow: Submit -> BeginReview -> Approve -> Payout.
-   - Concurrency test: simulate two simultaneous review requests on the same claim and verify one succeeds while the second receives HTTP 409 Conflict.
-   - Audit trail verification: verify complete `ClaimHistory` records after full lifecycle.
+### Completed Tasks
+1. Implemented centralized `ExceptionHandlingMiddleware` in `Api`:
+   - Registered ASP.NET Core `ProblemDetails` services in `Program.cs`.
+   - Maps `CoverageExceededException`, `PolicyExpiredException`, `InvalidClaimStateException`, `DomainException`, `ValidationException`, `ArgumentException` -> `400 Bad Request`.
+   - Maps `KeyNotFoundException` and `UnauthorizedResourceAccessException` -> `404 Not Found` (preserving BOLA defense).
+   - Maps `DbUpdateConcurrencyException` -> `409 Conflict`.
+   - Maps known unique constraint violations (SQL Server 2601 / 2627 for email and policy number) -> `409 Conflict`.
+   - Sanitizes unhandled exceptions -> `500 Internal Server Error` with generic client-safe messages (never exposing stack traces, DB credentials, or connection strings).
+   - Enriches all problem details with `status`, `title`, `detail`, `instance`, `traceId`, and backward-compatible `message`.
+2. Standardized API Controller responses:
+   - Configured `InvalidModelStateResponseFactory` in `Program.cs` for consistent RFC 7807 validation responses.
+   - Added `ApiResultExtensions.ToProblemDetails` across `AuthController`, `PoliciesController`, `ClaimsController`, and `AdminClaimsController`.
+3. Created test infrastructure:
+   - `CustomWebApplicationFactory`: Fast in-memory database testing for core endpoints and routing.
+   - `SqlServerWebApplicationFactory`: Real SQL Server LocalDB integration testing with dedicated isolated databases (`InsuranceClaimsTracker_ConcurrencyTest_<guid>`) and native `rowversion` / `timestamp` enforcement.
+   - Zero interference with the development database `InsuranceClaimsTrackerDb`.
+4. Automated test suites created:
+   - `ExceptionHandlingMiddlewareTests.cs` (Unit tests): Verifies all exception mappings, Content-Type headers, ProblemDetails JSON output, and stack trace sanitization.
+   - `EndToEndBusinessWorkflowTests.cs` (Integration tests): Full 12-step customer and admin HTTP journey (Register -> Authenticate -> Provision Admin -> Authenticate Admin -> Create Policy -> Get Policy -> Submit Claim -> Get Claim & History -> Start Review -> Approve -> Payout -> Verify Chronological History) and independent claim rejection workflow.
+   - `SecurityRegressionTests.cs` (Integration tests): Comprehensive authentication (missing, malformed, expired, invalid signature), authorization (role enforcement), and BOLA/IDOR protection.
+   - `SqlServerConcurrencyRegressionTests.cs` (Integration tests): Deterministic concurrency testing against real SQL Server LocalDB verifying optimistic locking conflicts (HTTP 409), stale `RowVersion` detection, no orphaned `ClaimHistory` records, and rejection/payout state invariants.
+5. Live runtime API verification:
+   - Verified `/health`, `/swagger/index.html`, `/swagger/v1/swagger.json`, customer/admin registration, login, policy creation, claim filing, review, approval, payout, 401 unauthorized, 403 forbidden, 400 validation ProblemDetails, and 409 concurrency conflict against live Kestrel and LocalDB.
 
-### Acceptance Criteria
+### Acceptance Criteria Verified
 - All API exceptions return standard RFC 7807 `ProblemDetails` JSON.
 - Integration tests verify BOLA protection and prevent unauthorized resource access.
-- Concurrency integration tests verify optimistic locking and HTTP 409 response.
-- Full test suite passes 100% cleanly.
+- Concurrency integration tests verify optimistic locking and HTTP 409 response using native SQL Server `RowVersion`.
+- Full test suite passes 100% cleanly (224 total tests: 167 unit tests, 57 integration tests).
 
-### Verification Commands
+### Verification Commands & Results
 ```bash
-dotnet build
-dotnet test tests/InsuranceClaimsTracker.IntegrationTests
+dotnet build InsuranceClaimsTracker.sln
+# Build succeeded: 0 Warning(s) from code, 0 Error(s)
+
+dotnet test InsuranceClaimsTracker.sln
+# Passed! - Failed: 0, Passed: 167, Skipped: 0, Total: 167 (InsuranceClaimsTracker.UnitTests)
+# Passed! - Failed: 0, Passed:  57, Skipped: 0, Total:  57 (InsuranceClaimsTracker.IntegrationTests)
+# Total: 224 Passing Tests (100% Success)
 ```
 
 ---

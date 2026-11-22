@@ -83,6 +83,32 @@ In financial operations, two administrators approving or executing a payout simu
 
 ---
 
+### 1.5 Security Regression Testing & Sanitization
+The system includes comprehensive automated security regression suites in `InsuranceClaimsTracker.IntegrationTests/SecurityRegressionTests.cs`:
+
+- **Authentication Regression Tests**:
+  - Missing JWT token returns `401 Unauthorized`.
+  - Malformed JWT tokens return `401 Unauthorized`.
+  - Expired JWT tokens return `401 Unauthorized`.
+  - Invalid JWT signatures (tampered or signed with unauthorized keys) return `401 Unauthorized`.
+- **Authorization Regression Tests**:
+  - Customers cannot create policies (`POST /api/v1/policies` returns `403 Forbidden`).
+  - Customers cannot start claim reviews (`POST /api/v1/admin/claims/{id}/start-review` returns `403 Forbidden`).
+  - Customers cannot make approval/rejection decisions (`POST /api/v1/admin/claims/{id}/decision` returns `403 Forbidden`).
+  - Customers cannot disburse payouts (`POST /api/v1/admin/claims/{id}/payout` returns `403 Forbidden`).
+  - Public registration attempts with injected `role: "Admin"` parameters are neutralized (assigned `UserRole.Customer`).
+- **BOLA / IDOR Defense Tests**:
+  - Customer A cannot retrieve Customer B's policy (`GET /api/v1/policies/{id}` returns `404 Not Found`).
+  - Customer A cannot retrieve Customer B's claim (`GET /api/v1/claims/{id}` returns `404 Not Found`).
+  - Customer A cannot file a claim against Customer B's policy (`POST /api/v1/claims` returns `404 Not Found`).
+  - Queries for policies and claims strictly scope returned entities to the authenticated caller's customer ID.
+- **Information Disclosure Sanitization**:
+  - Security and validation errors return standardized RFC 7807 `ProblemDetails` payloads.
+  - Production responses never expose internal stack traces, database schema specifics, SQL Server connection strings, or JWT signing secrets.
+  - Unexpected internal errors return generic client-safe messages: `"An unexpected error occurred while processing your request. Please try again later."`
+
+---
+
 ## 2. Secrets Management & Environment Configuration
 
 Secrets must never be committed to source control.

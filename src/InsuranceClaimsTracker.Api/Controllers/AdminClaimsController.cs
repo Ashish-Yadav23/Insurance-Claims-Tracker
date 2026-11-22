@@ -1,3 +1,4 @@
+using InsuranceClaimsTracker.Api.Extensions;
 using InsuranceClaimsTracker.Application.Common.Interfaces;
 using InsuranceClaimsTracker.Application.DTOs.Admin;
 using InsuranceClaimsTracker.Application.DTOs.Claims;
@@ -20,11 +21,11 @@ public class AdminClaimsController : ControllerBase
 
     [HttpPost("{id:int}/start-review")]
     [ProducesResponseType(typeof(ClaimResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> StartReview(
         int id,
         [FromBody] StartReviewRequestDto request,
@@ -33,7 +34,7 @@ public class AdminClaimsController : ControllerBase
         var result = await _adminClaimService.StartReviewAsync(id, request, cancellationToken);
         if (!result.IsSuccess)
         {
-            return StatusCode(result.StatusCode, new { message = result.ErrorMessage });
+            return this.ToProblemDetails(result);
         }
 
         return Ok(result.Value);
@@ -41,11 +42,11 @@ public class AdminClaimsController : ControllerBase
 
     [HttpPost("{id:int}/decision")]
     [ProducesResponseType(typeof(ClaimResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Decision(
         int id,
         [FromBody] ClaimDecisionRequestDto request,
@@ -54,7 +55,7 @@ public class AdminClaimsController : ControllerBase
         var result = await _adminClaimService.ProcessDecisionAsync(id, request, cancellationToken);
         if (!result.IsSuccess)
         {
-            return StatusCode(result.StatusCode, new { message = result.ErrorMessage });
+            return this.ToProblemDetails(result);
         }
 
         return Ok(result.Value);
@@ -62,11 +63,11 @@ public class AdminClaimsController : ControllerBase
 
     [HttpPost("{id:int}/payout")]
     [ProducesResponseType(typeof(ClaimResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Payout(
         int id,
         [FromBody] ClaimPayoutRequestDto request,
@@ -75,7 +76,7 @@ public class AdminClaimsController : ControllerBase
         var result = await _adminClaimService.RecordPayoutAsync(id, request, cancellationToken);
         if (!result.IsSuccess)
         {
-            return StatusCode(result.StatusCode, new { message = result.ErrorMessage });
+            return this.ToProblemDetails(result);
         }
 
         return Ok(result.Value);

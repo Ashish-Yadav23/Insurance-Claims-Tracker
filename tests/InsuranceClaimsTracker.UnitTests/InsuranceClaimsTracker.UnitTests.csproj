@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\InsuranceClaimsTracker.Domain\InsuranceClaimsTracker.Domain.csproj" />
     <ProjectReference Include="..\..\src\InsuranceClaimsTracker.Application\InsuranceClaimsTracker.Application.csproj" />
     <ProjectReference Include="..\..\src\InsuranceClaimsTracker.Infrastructure\InsuranceClaimsTracker.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\InsuranceClaimsTracker.Api\InsuranceClaimsTracker.Api.csproj" />
   </ItemGroup>
 
 </Project>

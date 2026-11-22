@@ -1,21 +1,49 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text;
+using InsuranceClaimsTracker.Api.Middleware;
 using InsuranceClaimsTracker.Application;
 using InsuranceClaimsTracker.Infrastructure;
 using InsuranceClaimsTracker.Infrastructure.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Register ProblemDetails services
+builder.Services.AddProblemDetails();
+
 // Register Layered Dependencies
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
-// Add API Controllers and Endpoints
+// Add API Controllers and configure standardized RFC 7807 validation responses
 builder.Services.AddControllers();
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var traceId = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier;
+        var problemDetails = new ValidationProblemDetails(context.ModelState)
+        {
+            Status = StatusCodes.Status400BadRequest,
+            Title = "One or more validation errors occurred.",
+            Detail = "One or more validation errors occurred.",
+            Instance = context.HttpContext.Request.Path
+        };
+        problemDetails.Extensions["traceId"] = traceId;
+        problemDetails.Extensions["message"] = problemDetails.Detail;
+
+        return new BadRequestObjectResult(problemDetails)
+        {
+            ContentTypes = { "application/json" }
+        };
+    };
+});
+
 builder.Services.AddEndpointsApiExplorer();
 
 // Configure JWT Bearer Authentication
@@ -84,7 +112,10 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
-// Configure HTTP request pipeline
+// 1. Exception handling registered early in the request pipeline
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+// 2. Swagger / OpenAPI in Development
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -95,13 +126,14 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+// 3. HTTPS Redirection
 app.UseHttpsRedirection();
 
-// Authentication MUST be called before Authorization
+// 4. Authentication MUST be called before Authorization
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Map Health Check Endpoint
+// 5. Map Health Check Endpoint
 app.MapHealthChecks("/health", new HealthCheckOptions
 {
     ResponseWriter = async (context, report) =>
@@ -116,6 +148,7 @@ app.MapHealthChecks("/health", new HealthCheckOptions
     }
 });
 
+// 6. Map Controllers
 app.MapControllers();
 
 app.Run();
