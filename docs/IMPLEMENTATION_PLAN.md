@@ -189,37 +189,38 @@ dotnet test InsuranceClaimsTracker.sln
 
 ---
 
-## Phase 5: Admin Claim Review State Machine & Concurrency Handling
+## Phase 5: Admin Claim Review State Machine & Concurrency Handling (Completed)
 
 ### Goal
 Implement administrative review, decision (approve/reject), and payout workflows with mandatory review notes, append-only audit tracking, and EF Core optimistic concurrency conflict handling.
 
-### Tasks
-1. Implement `ClaimReviewService` in `Application`:
-   - `BeginReviewAsync(int claimId, int adminId, string note)`: Transitions `Submitted` -> `UnderReview`.
-   - `ApproveClaimAsync(int claimId, int adminId, string reviewNote)`: Transitions `UnderReview` -> `Approved` (note required).
-   - `RejectClaimAsync(int claimId, int adminId, string reviewNote)`: Transitions `UnderReview` -> `Rejected` (note required).
-   - `RecordPayoutAsync(int claimId, int adminId, string payoutReference, string note)`: Transitions `Approved` -> `Paid`.
-2. Ensure every status transition appends a record to `ClaimHistory` (`PreviousStatus`, `NewStatus`, `ChangedById`, `ChangedAt`, `ReviewNote`). Expose zero update or delete methods for `ClaimHistory`.
-3. Handle concurrency:
-   - When updating claims, EF Core includes `RowVersion` in the update check.
-   - Catch `DbUpdateConcurrencyException` in application/API layers and propagate clean concurrency error.
-4. Implement `AdminClaimsController` in `Api`:
-   - `POST /api/v1/claims/{id}/review`
-   - `POST /api/v1/claims/{id}/decision`
-   - `POST /api/v1/claims/{id}/payout`
-   - `GET /api/v1/claims/{id}/history`
-5. Implement unit tests in `InsuranceClaimsTracker.UnitTests`:
-   - State transition validation (disallow direct `Submitted` -> `Approved`, disallow payout on `Rejected` claims).
-   - Mandatory review note validation.
-   - Concurrency conflict handling simulation.
+### Completed Tasks
+1. Implemented Claim State Machine in `Claim` domain entity:
+   - `StartReview(int adminId, string? reviewNote)`: Validates transition `Submitted` -> `UnderReview`.
+   - `Approve(int adminId, decimal approvedAmount, string reviewNote)`: Validates transition `UnderReview` -> `Approved` (note & valid amount required, `approvedAmount <= ClaimAmount`).
+   - `Reject(int adminId, string reviewNote)`: Validates transition `UnderReview` -> `Rejected` (note required, clears `ApprovedAmount`).
+   - `RecordPayout(int adminId, string paymentReference, DateTimeOffset? paidAt)`: Validates transition `Approved` -> `Paid` (prevents duplicate payouts).
+2. Ensured every status transition appends an immutable record to `ClaimHistory` (`PreviousStatus`, `NewStatus`, `ChangedById`, `ChangedAt`, `ReviewNote`).
+3. Applied EF Core migration `AddPayoutAndApprovalFieldsToClaim` adding `ApprovedAmount`, `PaymentReference`, `PaidAt`, and `CK_Claims_ApprovedAmount` constraint to `Claims` table.
+4. Concurrency control:
+   - Client sends base64-encoded `RowVersion` in all modification requests.
+   - EF Core optimistic concurrency checking with `RowVersion` sequence comparison and `DbUpdateConcurrencyException` mapping to HTTP 409 Conflict.
+5. Implemented `AdminClaimsController` in `Api`:
+   - `POST /api/v1/admin/claims/{id}/start-review`
+   - `POST /api/v1/admin/claims/{id}/decision`
+   - `POST /api/v1/admin/claims/{id}/payout`
+6. Implemented unit tests in `InsuranceClaimsTracker.UnitTests` and integration tests in `InsuranceClaimsTracker.IntegrationTests`:
+   - Domain state transitions and invariants.
+   - Admin claim service handling authorization, input validation, and concurrency conflicts.
+   - End-to-end HTTP integration tests for all admin endpoints.
+7. Conducted live runtime HTTP API and SQL Server database verification.
 
 ### Acceptance Criteria
-- Invalid state transitions throw `InvalidClaimStateException`.
+- Invalid state transitions throw `InvalidClaimStateException` (HTTP 400).
 - Approving or rejecting without a review note fails validation.
-- Payout is strictly disallowed on claims not in `Approved` status.
+- Payout is strictly disallowed on claims not in `Approved` status; duplicate payout is rejected.
 - Concurrent updates to the same claim trigger concurrency conflict handling (HTTP 409).
-- All Phase 5 unit tests pass.
+- All unit and integration tests pass (192 passing tests).
 
 ### Verification Commands
 ```bash

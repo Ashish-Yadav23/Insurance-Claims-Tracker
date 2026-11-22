@@ -37,6 +37,9 @@ erDiagram
         int Id PK "IDENTITY(1,1)"
         int PolicyId FK "INT, NOT NULL -> POLICIES(Id)"
         decimal ClaimAmount "DECIMAL(18,2), NOT NULL, CHECK > 0"
+        decimal ApprovedAmount "DECIMAL(18,2), NULL, CHECK > 0 AND <= ClaimAmount"
+        string PaymentReference "NVARCHAR(100), NULL"
+        datetimeoffset PaidAt "DATETIMEOFFSET, NULL"
         datetimeoffset IncidentDate "DATETIMEOFFSET, NOT NULL"
         string Description "NVARCHAR(2000), NOT NULL"
         int Status "INT, NOT NULL (1=Submitted, 2=UnderReview, 3=Approved, 4=Rejected, 5=Paid)"
@@ -103,6 +106,9 @@ Records individual claims filed by customers against active policies.
 | `Id` | `INT` | No | Primary Key, `IDENTITY(1,1)` |
 | `PolicyId` | `INT` | No | Foreign Key to `Policies(Id)`. **Delete Rule: RESTRICT / NO ACTION** |
 | `ClaimAmount` | `DECIMAL(18,2)`| No | Requested payout amount. Check constraint `ClaimAmount > 0` |
+| `ApprovedAmount` | `DECIMAL(18,2)`| Yes | Payout amount approved by admin. Check constraint `[ApprovedAmount] IS NULL OR ([ApprovedAmount] > 0 AND [ApprovedAmount] <= [ClaimAmount])` |
+| `PaymentReference` | `NVARCHAR(100)`| Yes | Payout transaction / reference identifier recorded on payment |
+| `PaidAt` | `DATETIMEOFFSET` | Yes | Payout execution timestamp (UTC) |
 | `IncidentDate` | `DATETIMEOFFSET` | No | Incident timestamp |
 | `Description` | `NVARCHAR(2000)`| No | Detailed claim narrative |
 | `Status` | `INT` | No | Enum: `1=Submitted`, `2=UnderReview`, `3=Approved`, `4=Rejected`, `5=Paid` |

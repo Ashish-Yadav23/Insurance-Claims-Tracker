@@ -196,50 +196,62 @@ Files a new claim against an active policy.
 
 ### 5.1 Begin Review
 Transitions a claim from `Submitted` to `UnderReview`.
-- **Route**: `POST /api/v1/claims/{id}/review`
-- **Authorization**: Admin only
+- **Route**: `POST /api/v1/admin/claims/{id}/start-review`
+- **Authorization**: `[Authorize(Roles = "Admin")]`
 - **Request Body**:
   ```json
   {
-    "note": "Assigned to claims adjuster for documentation verification."
+    "rowVersion": "AAAAAAAAJxE=",
+    "reviewNote": "Assigned to claims adjuster for documentation verification."
   }
   ```
 - **Responses**:
-  - `200 OK`: Updated Claim DTO.
-  - `400 Bad Request`: Claim is not in `Submitted` status.
-  - `409 Conflict`: Concurrency conflict (claim was updated concurrently by another admin).
+  - `200 OK`: Updated Claim DTO (status: `UnderReview`, new `rowVersion`, appended audit history).
+  - `400 Bad Request`: Claim is not in `Submitted` status, or invalid Base64 `rowVersion`.
+  - `401 Unauthorized`: Missing or invalid authentication token.
+  - `403 Forbidden`: Authenticated user does not possess `Admin` role.
+  - `404 Not Found`: Claim not found.
+  - `409 Conflict`: Concurrency conflict (claim was modified by another operation).
 
 ### 5.2 Decide Claim (Approve / Reject)
 Transitions a claim from `UnderReview` to `Approved` or `Rejected`.
-- **Route**: `POST /api/v1/claims/{id}/decision`
-- **Authorization**: Admin only
+- **Route**: `POST /api/v1/admin/claims/{id}/decision`
+- **Authorization**: `[Authorize(Roles = "Admin")]`
 - **Request Body**:
   ```json
   {
     "decision": "Approved", // or "Rejected"
-    "reviewNote": "Repair estimate verified with authorized mechanic shop."
+    "approvedAmount": 1150.00, // required when decision is "Approved", must be omitted/null when "Rejected"
+    "reviewNote": "Repair estimate verified with authorized mechanic shop.",
+    "rowVersion": "AAAAAAAAJxI="
   }
   ```
 - **Responses**:
-  - `200 OK`: Updated Claim DTO.
-  - `400 Bad Request`: Missing mandatory review note or invalid status transition.
+  - `200 OK`: Updated Claim DTO (status: `Approved` or `Rejected`, `approvedAmount` set or cleared, new `rowVersion`).
+  - `400 Bad Request`: Missing mandatory review note, missing or invalid approved amount for approval, approved amount provided for rejection, or claim not in `UnderReview` status.
+  - `401 Unauthorized`: Missing or invalid authentication token.
+  - `403 Forbidden`: Authenticated user does not possess `Admin` role.
+  - `404 Not Found`: Claim not found.
   - `409 Conflict`: Concurrency conflict.
 
 ### 5.3 Record Payout
 Transitions an `Approved` claim to `Paid`.
-- **Route**: `POST /api/v1/claims/{id}/payout`
-- **Authorization**: Admin only
+- **Route**: `POST /api/v1/admin/claims/{id}/payout`
+- **Authorization**: `[Authorize(Roles = "Admin")]`
 - **Request Body**:
   ```json
   {
-    "payoutReference": "ACH-TRANSFER-99210",
-    "note": "Full payment disbursed to policyholder bank account."
+    "paymentReference": "ACH-TRANSFER-99210",
+    "rowVersion": "AAAAAAAAJxM="
   }
   ```
 - **Responses**:
-  - `200 OK`: Updated Claim DTO with status `Paid`.
-  - `400 Bad Request`: Claim is not in `Approved` status.
-  - `409 Conflict`: Concurrency conflict (e.g. payout was already recorded).
+  - `200 OK`: Updated Claim DTO (status: `Paid`, `paymentReference`, `paidAt` UTC timestamp).
+  - `400 Bad Request`: Missing payment reference, or claim is not in `Approved` status, or duplicate payout attempt.
+  - `401 Unauthorized`: Missing or invalid authentication token.
+  - `403 Forbidden`: Authenticated user does not possess `Admin` role.
+  - `404 Not Found`: Claim not found.
+  - `409 Conflict`: Concurrency conflict (e.g. payout was already recorded concurrently).
 
 ### 5.4 AI Advisory Triage (LLM Assistance)
 Generates AI-suggested category and narrative summary for admin assistance.

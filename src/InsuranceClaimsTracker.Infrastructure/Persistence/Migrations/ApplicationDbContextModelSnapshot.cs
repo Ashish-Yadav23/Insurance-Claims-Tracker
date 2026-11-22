@@ -38,6 +38,10 @@ namespace InsuranceClaimsTracker.Infrastructure.Persistence.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
 
+                    b.Property<decimal?>("ApprovedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<decimal>("ClaimAmount")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -52,6 +56,13 @@ namespace InsuranceClaimsTracker.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("IncidentDate")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("PaidAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("PaymentReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<int>("PolicyId")
                         .HasColumnType("int");
@@ -80,6 +91,8 @@ namespace InsuranceClaimsTracker.Infrastructure.Persistence.Migrations
 
                     b.ToTable("Claims", null, t =>
                         {
+                            t.HasCheckConstraint("CK_Claims_ApprovedAmount", "[ApprovedAmount] IS NULL OR ([ApprovedAmount] > 0 AND [ApprovedAmount] <= [ClaimAmount])");
+
                             t.HasCheckConstraint("CK_Claims_ClaimAmount", "[ClaimAmount] > 0");
 
                             t.HasCheckConstraint("CK_Claims_Status", "[Status] IN (1, 2, 3, 4, 5)");

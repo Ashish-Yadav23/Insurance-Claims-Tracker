@@ -140,6 +140,23 @@ public class ApplicationDbContextModelTests
         var constraints = entity.GetCheckConstraints().ToList();
         Assert.Contains(constraints, c => c.Name == "CK_Claims_ClaimAmount" && c.Sql == "[ClaimAmount] > 0");
         Assert.Contains(constraints, c => c.Name == "CK_Claims_Status" && c.Sql == "[Status] IN (1, 2, 3, 4, 5)");
+        Assert.Contains(constraints, c => c.Name == "CK_Claims_ApprovedAmount" && c.Sql == "[ApprovedAmount] IS NULL OR ([ApprovedAmount] > 0 AND [ApprovedAmount] <= [ClaimAmount])");
+
+        // ApprovedAmount, PaymentReference, PaidAt
+        var approvedProp = entity.FindProperty(nameof(Claim.ApprovedAmount));
+        Assert.NotNull(approvedProp);
+        Assert.Equal(18, approvedProp.GetPrecision());
+        Assert.Equal(2, approvedProp.GetScale());
+        Assert.True(approvedProp.IsNullable);
+
+        var paymentRefProp = entity.FindProperty(nameof(Claim.PaymentReference));
+        Assert.NotNull(paymentRefProp);
+        Assert.Equal(100, paymentRefProp.GetMaxLength());
+        Assert.True(paymentRefProp.IsNullable);
+
+        var paidAtProp = entity.FindProperty(nameof(Claim.PaidAt));
+        Assert.NotNull(paidAtProp);
+        Assert.True(paidAtProp.IsNullable);
 
         // Foreign keys & delete behaviors
         var policyFk = entity.GetForeignKeys().FirstOrDefault(fk => fk.PrincipalEntityType.ClrType == typeof(Policy));

@@ -12,6 +12,7 @@ public class ClaimConfiguration : IEntityTypeConfiguration<Claim>
         {
             t.HasCheckConstraint("CK_Claims_ClaimAmount", "[ClaimAmount] > 0");
             t.HasCheckConstraint("CK_Claims_Status", "[Status] IN (1, 2, 3, 4, 5)");
+            t.HasCheckConstraint("CK_Claims_ApprovedAmount", "[ApprovedAmount] IS NULL OR ([ApprovedAmount] > 0 AND [ApprovedAmount] <= [ClaimAmount])");
         });
 
         builder.HasKey(c => c.Id);
@@ -39,6 +40,17 @@ public class ClaimConfiguration : IEntityTypeConfiguration<Claim>
 
         builder.HasIndex(c => c.Status)
             .HasDatabaseName("IX_Claims_Status");
+
+        builder.Property(c => c.ApprovedAmount)
+            .HasPrecision(18, 2)
+            .IsRequired(false);
+
+        builder.Property(c => c.PaymentReference)
+            .HasMaxLength(100)
+            .IsRequired(false);
+
+        builder.Property(c => c.PaidAt)
+            .IsRequired(false);
 
         builder.Property(c => c.AiSuggestedCategory)
             .HasMaxLength(100)
