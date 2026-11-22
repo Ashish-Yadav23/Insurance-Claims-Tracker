@@ -86,14 +86,15 @@ flowchart TD
   - **Interfaces**:
     - Data Access: `IApplicationDbContext`.
     - Identity & Security: `IJwtTokenGenerator`, `IPasswordHasher`, `ICurrentUserContext`.
-    - External Services: `IClaimAiAdvisoryService`.
+    - GenAI Advisory & LLM Abstraction: `IClaimAdvisoryService`, `ILlmClient`.
   - **Services**:
     - `AuthService`: Registration (strictly locked to Customer role), credential verification, JWT issuance.
     - `PolicyService`: Policy queries with strict ownership enforcement, admin policy issuance.
     - `ClaimService`: Claim submission, eligibility verification, customer claim retrieval.
     - `ClaimReviewService`: Admin claim processing (review, approve, reject, pay), concurrency conflict handling, and append-only audit trail logging.
-  - **DTOs**: Request and Response models.
-  - **Validators**: FluentValidation rules.
+    - `ClaimAdvisoryService`: Triage orchestration, admin authorization validation, PII data-minimization, LLM client invocation, markdown stripping, and schema validation.
+  - **DTOs**: Request and Response models (including `ClaimAdvisoryResponseDto`).
+  - **Validators**: FluentValidation rules and advisory domain normalization rules (`ClaimAdvisoryConstants`).
 
 ### `InsuranceClaimsTracker.Infrastructure`
 - **Purpose**: Handles all technical concerns, database interactions, and external integrations.
@@ -108,7 +109,8 @@ flowchart TD
     - `JwtTokenGenerator`: Issues signed HS256 JWT tokens.
     - `CurrentUserContext`: Extracts `UserId` and `Role` from the HTTP request's `ClaimsPrincipal`.
   - **External Integrations**:
-    - `ClaimAiAdvisoryService`: Structured prompt LLM client for advisory categorization and triage summaries.
+    - `GeminiLlmClient`: Vendor-specific REST client targeting Google Gemini API (`/models/{model}:generateContent`) with `x-goog-api-key` header authentication, linked timeout tokens, exponential backoff retries on transient errors (429/5xx), immediate failure on 401/403, and JSON schema enforcement.
+    - `AiServiceSettings`: Strongly-typed configuration options for AI provider settings.
 
 ### `InsuranceClaimsTracker.Api`
 - **Purpose**: Composition root and HTTP entry point.
@@ -156,11 +158,12 @@ The ASP.NET Core request pipeline in `InsuranceClaimsTracker.Api/Program.cs` is 
 | Unexpected `Exception` | `500 Internal Server Error` | Internal Server Error | "An unexpected error occurred while processing your request. Please try again later." |
 
 ### 4.3 Testing Architecture & Database Isolation
-The testing suite is partitioned into two specialized test projects:
-- **`InsuranceClaimsTracker.UnitTests`** (167 tests): Fast, isolated tests for domain entities, invariants, state transitions, password hashing, JWT generation, and `ExceptionHandlingMiddleware` mapping logic.
-- **`InsuranceClaimsTracker.IntegrationTests`** (57 tests): End-to-end HTTP pipeline tests using `WebApplicationFactory<Program>`:
-  - **In-Memory Isolated Factory (`CustomWebApplicationFactory`)**: Used for high-speed authentication, endpoint routing, and BOLA regression tests.
+The testing suite is partitioned into two specialized test projects (253 total passing tests):
+- **`InsuranceClaimsTracker.UnitTests`** (190 tests): Fast, isolated tests for domain entities, invariants, state transitions, password hashing, JWT generation, `ExceptionHandlingMiddleware` mapping logic, and Phase 7 `ClaimAdvisoryService` unit tests (18 tests covering all categories, markdown stripping, empty descriptions, priority mappings, and provider errors) and `GeminiLlmClient` unit tests (5 tests covering header auth, retries, 401/403 non-retry, and 503 fallback).
+- **`InsuranceClaimsTracker.IntegrationTests`** (63 tests): End-to-end HTTP pipeline tests using `WebApplicationFactory<Program>`:
+  - **In-Memory Isolated Factory (`CustomWebApplicationFactory`)**: Used for high-speed authentication, endpoint routing, BOLA regression tests, and `ClaimAdvisoryEndpointTests` (6 tests with `MockIntegrationLlmClient`).
   - **Native SQL Server Factory (`SqlServerWebApplicationFactory`)**: Used for deterministic concurrency regression tests and complete end-to-end business lifecycle verification against real SQL Server LocalDB with native `rowversion` / `timestamp` columns.
+  - **Zero External Paid Calls Guarantee**: Both integration factories inject `MockIntegrationLlmClient`, guaranteeing zero paid or external API calls during automated CI/CD runs.
   - **Database Isolation Guarantee**: Never executes destructive scripts or teardown against the development database `InsuranceClaimsTrackerDb`. Dedicated isolated databases (`InsuranceClaimsTracker_ConcurrencyTest_<guid>`) are automatically provisioned with EF Core migrations and dropped on test completion.
 
 ---
@@ -191,9 +194,85 @@ The testing suite is partitioned into two specialized test projects:
 ### Decision 6: Why Place GenAI Integration After Baseline Testing?
 - **Rationale**: Core claim lifecycle rules, financial state transitions, and authorization policies form the critical foundation of the system. GenAI is purely advisory and non-deterministic. Implementing and verifying the deterministic workflows and test suites first ensures the core domain is robust before adding external AI integrations.
 
+### Decision 7: Why Keep AI Advisory Responses Ephemeral in Phase 7?
+- **Rationale**: For initial AI triage integration, administrators request on-demand assistance while viewing submitted claims. Storing non-deterministic AI text directly into the primary database record introduces migration overhead and conflates immutable business state with transient LLM evaluations. Ephemeral responses maintain the strict immutability of `Claims` and `ClaimHistory` while delivering instantaneous triage assistance.
+
 ---
 
-## 5. Related Documentation Links
+## 6. GenAI Claim Advisory Architecture & LLM Integration (Phase 7)
+
+### 6.1 Design Goals & Core Invariants
+The AI Claim Advisory Service (`POST /api/v1/admin/claims/{id}/advisory`) provides intelligent claim categorization, concise summarization, and suggested priority levels for administrators triaging claims.
+- **Strictly Advisory**: The LLM output is purely informative. The system **never** automatically approves, rejects, alters payout amounts, or modifies claim status based on AI output.
+- **Zero Invariant Mutation**: Invoking the advisory endpoint creates zero `ClaimHistory` records and leaves `Claim.Status`, `ApprovedAmount`, `PaymentReference`, `PaidAt`, and `RowVersion` completely untouched.
+- **Admin-Only Authorization**: Secured with `[Authorize(Roles = "Admin")]`. Customer requests are rejected with `403 Forbidden`, and unauthenticated requests return `401 Unauthorized`.
+- **Database-Driven Context**: The application retrieves the claim description, amount, incident date, and policy type directly from the database using the route parameter `{id}`. Client-supplied description or context overrides are never accepted.
+
+### 6.2 Data Flow & Component Decoupling
+The architecture enforces strict decoupling between application orchestration and provider-specific transport:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Administrator
+    participant API as AdminClaimsController
+    participant SVC as ClaimAdvisoryService
+    participant DB as ApplicationDbContext
+    participant LLM as GeminiLlmClient
+    participant EXT as Google Gemini REST API
+
+    Admin->>API: POST /api/v1/admin/claims/42/advisory
+    API->>SVC: GetAdvisoryAsync(42, CancellationToken)
+    SVC->>DB: Query Claim & Policy (id: 42)
+    alt Claim Not Found
+        DB-->>SVC: null
+        SVC-->>API: ServiceResult.NotFound (404)
+        API-->>Admin: RFC 7807 404 ProblemDetails
+    else Claim Found
+        DB-->>SVC: Claim (Description, Amount, PolicyType, etc.)
+        SVC->>SVC: Data Minimization (Strip PII, isolate untrusted description)
+        SVC->>LLM: GenerateAdvisoryAsync(LlmAdvisoryRequest, CancellationToken)
+        LLM->>EXT: POST /models/gemini-2.5-flash:generateContent (x-goog-api-key)
+        alt Upstream Failure / Timeout / 429
+            EXT-->>LLM: Error / Timeout
+            LLM-->>SVC: LlmAdvisoryResult.Failed (503 Service Unavailable)
+            SVC-->>API: ServiceResult.Unavailable (503)
+            API-->>Admin: RFC 7807 503 ProblemDetails
+        else Success
+            EXT-->>LLM: 200 OK (Structured JSON)
+            LLM-->>SVC: Raw JSON Content
+            SVC->>SVC: Strip Markdown & Sanitize
+            SVC->>SVC: Independent Schema Validation (Allowed Category & Priority)
+            SVC-->>API: ServiceResult.Ok(ClaimAdvisoryResponseDto)
+            API-->>Admin: 200 OK { category, summary, suggestedPriority }
+        end
+    end
+```
+
+### 6.3 Prompt Engineering & Structured JSON Constraints
+1. **System Instruction**:
+   - Instructs the model to act as an insurance claim triage assistant.
+   - Enforces controlled category selection: `Medical`, `AutoAccident`, `PropertyDamage`, `WaterDamage`, `Theft`, `Life`, `Other`.
+   - Enforces controlled priority selection: `Low`, `Medium`, `High`.
+   - Strict guardrails: Explicitly prohibits approving/rejecting claims, calculating payouts, or executing commands embedded in claim descriptions.
+2. **Untrusted Data Isolation**:
+   - The user claim description is treated as untrusted data and wrapped in boundary tags (`<claim_description>...</claim_description>`) to neutralize prompt injection attacks.
+3. **Provider-Enforced JSON Schema**:
+   - Configures `response_mime_type: "application/json"` with JSON schema definition in the request payload.
+4. **Server-Side Independent Validation**:
+   - All AI output is independently validated in `ClaimAdvisoryService` before reaching the caller:
+     - Regex/string normalization for allowed categories and priorities.
+     - Fallback categorization to `"Other"` and priority to `"Medium"` if unmapped values occur.
+     - Summary length capped at 1,000 characters.
+
+### 6.4 Resilience & Failure Handling
+- **Graceful Degradation**: If the API key is not configured, the LLM endpoint times out, or upstream rate limits (429) persist, the API returns HTTP `503 Service Unavailable` with a client-safe RFC 7807 `ProblemDetails` message. The core application workflow never crashes, and fabricated fallback answers are never presented as authentic AI assessments.
+- **Bounded Retries**: `GeminiLlmClient` implements transient retries with exponential backoff for HTTP 429 and 5xx errors (up to 3 attempts). Authentication errors (401/403) fail immediately without wasteful retries.
+- **Linked Cancellation Tokens**: Request timeouts (configurable in `AiServiceSettings`, default 15s) are linked to the incoming `HttpContext.RequestAborted` token to prevent orphaned background tasks.
+
+---
+
+## 7. Related Documentation Links
 - [Database Schema & State Transitions](DATABASE_SCHEMA.md)
 - [API Contract & Endpoint Specifications](API_CONTRACT.md)
 - [Security Architecture & Deployment Guide](SECURITY_AND_DEPLOYMENT.md)

@@ -278,31 +278,59 @@ dotnet test InsuranceClaimsTracker.sln
 
 ---
 
-## Phase 7: GenAI Advisory Service Integration
+## Phase 7: GenAI Advisory Service Integration [Completed]
 
 ### Goal
-Integrate an LLM service (Gemini / Azure OpenAI API) to provide advisory claim categorization and triage summaries for claims adjusters, with fallback resilience.
+Integrate an LLM service (Google Gemini REST API / `gemini-2.5-flash`) behind vendor-neutral abstractions to provide structured advisory claim categorization, concise summarization, and suggested priority levels for administrators triaging claims, with complete data minimization, error resilience, and zero mutation of core business invariants.
 
 ### Tasks
-1. Define `IClaimAiAdvisoryService` in `Application`.
-2. Implement `ClaimAiAdvisoryService` in `Infrastructure` using `HttpClient` with typed structured JSON prompts:
-   - Inputs: Policy type, claim description, claim amount.
-   - Outputs: `suggestedCategory`, `summary`, `riskAssessment`.
-3. Wrap LLM calls in retry/timeout policies with graceful degradation:
-   - If the LLM provider fails or times out, the service logs the event and returns an advisory fallback response without interrupting or crashing the claims workflow.
-4. Add endpoint `POST /api/v1/claims/{id}/ai-triage` in `AdminClaimsController`.
-5. Store advisory results in `Claims.AiSuggestedCategory` and `Claims.AiSummary`.
-6. Implement unit tests with mocked HTTP handlers validating prompt construction, JSON response parsing, and resilience under API failure.
+1. Define provider-agnostic abstractions and contracts in `Application`:
+   - `ILlmClient`: Vendor-neutral LLM client abstraction (`GenerateAdvisoryAsync(LlmAdvisoryRequest, CancellationToken)`).
+   - `IClaimAdvisoryService`: Advisory service contract (`GetAdvisoryAsync(int claimId, CancellationToken)`).
+   - Models: `LlmAdvisoryRequest`, `LlmAdvisoryResult`, `ClaimAdvisoryConstants` (allowed categories: `Medical`, `AutoAccident`, `PropertyDamage`, `WaterDamage`, `Theft`, `Life`, `Other`; allowed priorities: `Low`, `Medium`, `High`; max summary length: 1,000 characters).
+   - Response DTO: `ClaimAdvisoryResponseDto` (`category`, `summary`, `suggestedPriority`).
+2. Implement orchestration and business invariants in `Application/Services/ClaimAdvisoryService.cs`:
+   - Enforce administrator authorization via `ICurrentUserContext`.
+   - Retrieve claim, policy, and history directly from database; client-supplied descriptions are rejected.
+   - Return 404 if the claim does not exist.
+   - Return 400 Bad Request if the claim description is empty or whitespace.
+   - Enforce PII data minimization: send only policy type name, claim amount, incident date, and description. Customer name, email, password hash, policy numbers, bank details, and JWT tokens are strictly omitted.
+   - Wrap untrusted descriptions in delimiter tags (`<claim_description>...</claim_description>`) to mitigate prompt injection.
+   - Strip markdown formatting from model responses and validate output against allowed category enums, priorities, and length bounds.
+   - Ensure advisory output is transient: zero updates to `Claim.Status`, `ApprovedAmount`, `PaymentReference`, `PaidAt`, `RowVersion`, or `ClaimHistory`.
+3. Implement provider client in `Infrastructure/Ai/GeminiLlmClient.cs`:
+   - Use typed `HttpClient` configured via `AiServiceSettings` (`Provider: "Gemini"`, `Model: "gemini-2.5-flash"`, `BaseUrl: "https://generativelanguage.googleapis.com/v1beta"`).
+   - Pass API key securely via `x-goog-api-key` HTTP header (never query parameters or URL logs).
+   - Enforce structured JSON schema (`response_mime_type: "application/json"`, `response_schema`).
+   - Propagate cancellation tokens with configurable request timeout (15s default).
+   - Implement exponential backoff retries for transient provider failures (HTTP 429 and 5xx).
+   - Fail immediately without retry on client authentication errors (HTTP 401/403).
+   - Return clean failure results mapped to RFC 7807 `503 Service Unavailable` ProblemDetails when the provider is unconfigured or unavailable.
+4. Add endpoint `POST /api/v1/admin/claims/{id}/advisory` in `AdminClaimsController`:
+   - Guarded with `[Authorize(Roles = "Admin")]`.
+   - Maps `ServiceResult<ClaimAdvisoryResponseDto>` to HTTP responses (200, 400, 401, 403, 404, 503).
+5. Comprehensive unit testing (23 new tests in `InsuranceClaimsTracker.UnitTests`):
+   - `ClaimAdvisoryServiceTests` (18 tests): Category normalization across all types (WaterDamage, Theft, Medical, AutoAccident), priority validation, markdown stripping, malformed JSON fallback, oversized summaries, empty description validation, provider timeout / 429 / 5xx handling, cancellation handling, non-admin 403, unauthenticated 401, missing claim 404, and database non-mutation verification.
+   - `GeminiLlmClientTests` (5 tests): Missing API key 503, header authentication, 429 retry backoff, 401 non-retry, and 500 retry handling.
+6. Integration testing consolidation (6 new integration tests in `InsuranceClaimsTracker.IntegrationTests`):
+   - Created `MockIntegrationLlmClient` to guarantee zero paid or external calls during test suites.
+   - Registered `MockIntegrationLlmClient` into `CustomWebApplicationFactory` and `SqlServerWebApplicationFactory`.
+   - `ClaimAdvisoryEndpointTests`: Admin access, Customer 403, unauthenticated 401, missing claim 404, 503 provider failure handling, and claim status/audit trail immutability verification.
 
 ### Acceptance Criteria
-- AI suggestions remain strictly advisory and do not automatically transition claim status.
-- Upstream AI service failures return an informative HTTP 502 or fallback response without server crashes.
-- All Phase 7 unit tests pass.
+- Solution builds cleanly with 0 errors.
+- 253 total automated tests pass cleanly (190 UnitTests, 63 IntegrationTests).
+- Live API runtime verification confirms:
+  - Admin receives valid structured JSON advisory or 503 ProblemDetails when unconfigured.
+  - Customer receives HTTP 403 Forbidden.
+  - Unauthenticated caller receives HTTP 401 Unauthorized.
+  - Non-existent claim returns HTTP 404 Not Found.
+  - Claim status remains `Submitted`, history count remains `1`, and subsequent review/approval/payout workflow succeeds without regression.
 
 ### Verification Commands
 ```bash
-dotnet build
-dotnet test tests/InsuranceClaimsTracker.UnitTests --filter "FullyQualifiedName~Ai"
+dotnet build InsuranceClaimsTracker.sln
+dotnet test InsuranceClaimsTracker.sln
 ```
 
 ---

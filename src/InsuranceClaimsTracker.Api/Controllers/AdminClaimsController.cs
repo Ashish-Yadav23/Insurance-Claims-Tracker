@@ -81,4 +81,25 @@ public class AdminClaimsController : ControllerBase
 
         return Ok(result.Value);
     }
+
+    [HttpPost("{id:int}/advisory")]
+    [ProducesResponseType(typeof(ClaimAdvisoryResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> GetAdvisory(
+        int id,
+        [FromServices] IClaimAdvisoryService advisoryService,
+        CancellationToken cancellationToken)
+    {
+        var result = await advisoryService.GetClaimAdvisoryAsync(id, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            return this.ToProblemDetails(result);
+        }
+
+        return Ok(result.Value);
+    }
 }

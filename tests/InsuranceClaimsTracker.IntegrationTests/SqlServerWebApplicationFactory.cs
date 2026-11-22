@@ -18,6 +18,7 @@ public class SqlServerWebApplicationFactory : WebApplicationFactory<Program>, IA
 {
     private readonly string _testDbName;
     public string ConnectionString { get; }
+    public MockIntegrationLlmClient MockLlmClient { get; } = new();
 
     public SqlServerWebApplicationFactory()
     {
@@ -127,6 +128,14 @@ public class SqlServerWebApplicationFactory : WebApplicationFactory<Program>, IA
                 AccessTokenExpirationMinutes = 20
             });
             services.AddSingleton<IJwtTokenGenerator>(new JwtTokenGenerator(testJwtSettings));
+
+            // Replace ILlmClient with MockIntegrationLlmClient to prevent paid/external calls during automated tests
+            var llmDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(ILlmClient));
+            if (llmDescriptor != null)
+            {
+                services.Remove(llmDescriptor);
+            }
+            services.AddSingleton<ILlmClient>(_ => MockLlmClient);
         });
     }
 }

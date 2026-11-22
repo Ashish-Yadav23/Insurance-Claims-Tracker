@@ -1,5 +1,6 @@
 using System.Text;
 using InsuranceClaimsTracker.Application.Common.Interfaces;
+using InsuranceClaimsTracker.Infrastructure.Ai;
 using InsuranceClaimsTracker.Infrastructure.Authentication;
 using InsuranceClaimsTracker.Infrastructure.Persistence;
 using InsuranceClaimsTracker.Infrastructure.Services;
@@ -58,6 +59,16 @@ public static class DependencyInjection
 
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUserService, CurrentUserService>();
+
+        // Configure AI Advisory Service (Gemini / LLM Client)
+        var aiSection = configuration.GetSection(AiServiceSettings.SectionName);
+        services.Configure<AiServiceSettings>(aiSection);
+
+        services.AddHttpClient<ILlmClient, GeminiLlmClient>((serviceProvider, httpClient) =>
+        {
+            var aiSettings = serviceProvider.GetRequiredService<IOptions<AiServiceSettings>>().Value;
+            httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(5, aiSettings.TimeoutSeconds + 5));
+        });
 
         return services;
     }

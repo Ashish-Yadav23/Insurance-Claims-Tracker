@@ -279,23 +279,38 @@ Transitions an `Approved` claim to `Paid`.
   - `404 Not Found`: Claim not found.
   - `409 Conflict`: Concurrency conflict (e.g. payout was already recorded concurrently).
 
-### 5.4 AI Advisory Triage (LLM Assistance)
-Generates AI-suggested category and narrative summary for admin assistance.
-- **Route**: `POST /api/v1/claims/{id}/ai-triage`
-- **Authorization**: Admin only (implemented in Phase 7 after baseline tests pass)
+### 5.4 AI Claim Advisory Triage (LLM Assistance)
+Generates AI-suggested category, concise summary, and priority level to assist administrators reviewing submitted insurance claims.
+- **Route**: `POST /api/v1/admin/claims/{id}/advisory`
+- **Authorization**: `[Authorize(Roles = "Admin")]`
+- **Request Body**: None (route parameter `{id}` retrieves claim context from the database).
+- **Core Security Rule**: Client-supplied claim descriptions or policy parameters are never accepted. Context is loaded securely from the database.
 - **Responses**:
   - `200 OK`:
     ```json
     {
-      "claimId": 501,
-      "suggestedCategory": "Automotive - Minor Property Damage",
-      "summary": "Low-impact parking lot collision. Damage limited to bumper. Amount ($1,200) is well within $50,000 policy limit.",
-      "riskAssessment": "Low Risk",
-      "recommendedAction": "Standard documentation check and approve."
+      "category": "WaterDamage",
+      "summary": "Severe kitchen pipe burst caused flooding across hardwood flooring and cabinet baseboards.",
+      "suggestedPriority": "Medium"
     }
     ```
-  - `404 Not Found`: Claim does not exist.
-  - `502 Bad Gateway`: AI upstream provider failure (handled gracefully without crashing application).
+    *Supported Categories*: `Medical`, `AutoAccident`, `PropertyDamage`, `WaterDamage`, `Theft`, `Life`, `Other`.  
+    *Supported Priorities*: `Low`, `Medium`, `High`.
+  - `400 Bad Request`: Claim description in the database is null, empty, or whitespace.
+  - `401 Unauthorized`: Missing or invalid JWT authentication token.
+  - `403 Forbidden`: Authenticated user does not possess `Admin` role (e.g. Customers).
+  - `404 Not Found`: Claim with specified `{id}` does not exist.
+  - `503 Service Unavailable`: AI advisory provider is not configured, timed out, or encountered a non-recoverable upstream failure (returned as standard RFC 7807 ProblemDetails without modifying claim status or audit history):
+    ```json
+    {
+      "title": "An error occurred",
+      "status": 503,
+      "detail": "The AI advisory service is not currently configured.",
+      "instance": "/api/v1/admin/claims/2002/advisory",
+      "traceId": "00-fee7e83a008fc031050b07abf3c0d9e3-9ec77191ef971fea-00",
+      "message": "The AI advisory service is not currently configured."
+    }
+    ```
 
 ---
 

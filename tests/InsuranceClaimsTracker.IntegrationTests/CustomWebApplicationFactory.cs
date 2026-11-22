@@ -17,6 +17,7 @@ namespace InsuranceClaimsTracker.IntegrationTests;
 public class CustomWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _dbName = Guid.NewGuid().ToString();
+    public MockIntegrationLlmClient MockLlmClient { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -87,6 +88,14 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
                 AccessTokenExpirationMinutes = 20
             });
             services.AddSingleton<IJwtTokenGenerator>(new JwtTokenGenerator(testJwtSettings));
+
+            // Replace ILlmClient with MockIntegrationLlmClient to prevent paid/external calls during automated tests
+            var llmDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(ILlmClient));
+            if (llmDescriptor != null)
+            {
+                services.Remove(llmDescriptor);
+            }
+            services.AddSingleton<ILlmClient>(_ => MockLlmClient);
         });
     }
 }

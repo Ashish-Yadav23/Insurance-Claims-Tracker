@@ -75,16 +75,20 @@ In financial operations, two administrators approving or executing a payout simu
 
 ---
 
-### 1.4 AI Safety, Guardrails & Governance
+### 1.4 AI Safety, Guardrails & Governance (Phase 7 Implementation)
 - **Sequence in Roadmap**: GenAI integration is deliberately scheduled after the core claim workflows, status transitions, role authorizations, and baseline integration test suites are fully verified.
-- **Advisory Only**: AI suggestions are stored in `AiSuggestedCategory` and `AiSummary`. The LLM cannot execute state changes or approve disbursements.
-- **Data Minimization**: Prompts sent to the LLM contain only the claim narrative, policy type, and claim amount. Personally Identifiable Information (PII) such as customer names, emails, and bank details are strictly omitted from prompt payloads.
-- **Resilience**: The AI call is wrapped in a retry and fallback policy. If the LLM API is unavailable, the claim processing workflow continues uninterrupted, returning an advisory error status rather than failing the core workflow.
+- **Strictly Advisory**: AI suggestions are returned ephemerally to the requesting administrator (`POST /api/v1/admin/claims/{id}/advisory`). The LLM cannot execute state changes, approve claims, calculate disbursements, or modify database records.
+- **Data Minimization & Privacy Protection**: Prompts sent to the LLM contain only the minimum necessary business context: policy type name, claim amount, incident date, and claim description. All Personally Identifiable Information (PII)—including customer names, customer IDs, emails, password hashes, policy numbers, bank account numbers, JWT bearer tokens, and payment references—is strictly excluded from prompt construction.
+- **Prompt Injection Defense**: Claim descriptions provided by customers are treated strictly as untrusted user input, isolated inside explicit boundary tags (`<claim_description>...</claim_description>`). System instructions explicitly order the model never to treat text inside boundary tags as instructions or commands.
+- **Structured Output & Schema Enforcement**: Gemini REST API structured output mode is utilized (`response_mime_type: "application/json"` with JSON schema) enforcing `category`, `summary`, and `suggestedPriority`.
+- **Independent Server-Side Validation**: All LLM output undergoes secondary server-side sanitization: markdown code fences are stripped, categories are validated against allowed enums (`Medical`, `AutoAccident`, `PropertyDamage`, `WaterDamage`, `Theft`, `Life`, `Other`), priorities are validated (`Low`, `Medium`, `High`), and summary string lengths are bounded to a maximum of 1,000 characters.
+- **Resilience & Safe Fallback**: The client features configurable timeouts (15s), linked cancellation tokens, and exponential backoff retry policies for transient failures (HTTP 429 and 5xx). If the provider is unconfigured, unreachable, or persistently failing, the API returns standard RFC 7807 `503 Service Unavailable`. The core application workflows remain 100% operational, and artificial fallback values are never disguised as real model evaluations.
+- **Zero Automated Test Costs**: All automated unit and integration tests utilize test doubles (`TestLlmClient`, `MockIntegrationLlmClient`), preventing accidental charges, external network calls, or non-deterministic test results in CI/CD pipelines.
 
 ---
 
 ### 1.5 Security Regression Testing & Sanitization
-The system includes comprehensive automated security regression suites in `InsuranceClaimsTracker.IntegrationTests/SecurityRegressionTests.cs`:
+The system includes comprehensive automated security regression suites in `InsuranceClaimsTracker.IntegrationTests/SecurityRegressionTests.cs` and `ClaimAdvisoryEndpointTests.cs`:
 
 - **Authentication Regression Tests**:
   - Missing JWT token returns `401 Unauthorized`.
@@ -96,6 +100,7 @@ The system includes comprehensive automated security regression suites in `Insur
   - Customers cannot start claim reviews (`POST /api/v1/admin/claims/{id}/start-review` returns `403 Forbidden`).
   - Customers cannot make approval/rejection decisions (`POST /api/v1/admin/claims/{id}/decision` returns `403 Forbidden`).
   - Customers cannot disburse payouts (`POST /api/v1/admin/claims/{id}/payout` returns `403 Forbidden`).
+  - Customers cannot invoke claim advisory triage (`POST /api/v1/admin/claims/{id}/advisory` returns `403 Forbidden`).
   - Public registration attempts with injected `role: "Admin"` parameters are neutralized (assigned `UserRole.Customer`).
 - **BOLA / IDOR Defense Tests**:
   - Customer A cannot retrieve Customer B's policy (`GET /api/v1/policies/{id}` returns `404 Not Found`).
@@ -103,7 +108,7 @@ The system includes comprehensive automated security regression suites in `Insur
   - Customer A cannot file a claim against Customer B's policy (`POST /api/v1/claims` returns `404 Not Found`).
   - Queries for policies and claims strictly scope returned entities to the authenticated caller's customer ID.
 - **Information Disclosure Sanitization**:
-  - Security and validation errors return standardized RFC 7807 `ProblemDetails` payloads.
+  - Security, validation, and AI provider errors return standardized RFC 7807 `ProblemDetails` payloads.
   - Production responses never expose internal stack traces, database schema specifics, SQL Server connection strings, or JWT signing secrets.
   - Unexpected internal errors return generic client-safe messages: `"An unexpected error occurred while processing your request. Please try again later."`
 
@@ -131,10 +136,14 @@ JwtSettings__Issuer="InsuranceClaimsTrackerApi"
 JwtSettings__Audience="InsuranceClaimsTrackerClient"
 JwtSettings__DurationInMinutes="120"
 
-# AI Integration (configured in Phase 7)
-AiService__Provider="Gemini" # or "AzureOpenAI"
-AiService__ApiKey="<LLM-API-KEY>"
+# AI Integration (Phase 7: Google Gemini REST Client)
+# Note: ApiKey is passed via x-goog-api-key HTTP header (never query parameters or URL logs)
+AiService__Provider="Gemini"
 AiService__ModelId="gemini-2.5-flash"
+AiService__BaseUrl="https://generativelanguage.googleapis.com/v1beta"
+AiService__ApiKey="<LLM-API-KEY-STORED-IN-USER-SECRETS>"
+AiService__TimeoutSeconds="15"
+AiService__MaxRetries="3"
 ```
 
 ---
