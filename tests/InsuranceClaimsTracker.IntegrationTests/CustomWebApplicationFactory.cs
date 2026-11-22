@@ -1,10 +1,16 @@
+using System.Security.Claims;
+using System.Text;
 using InsuranceClaimsTracker.Application.Common.Interfaces;
+using InsuranceClaimsTracker.Infrastructure.Authentication;
 using InsuranceClaimsTracker.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 
 namespace InsuranceClaimsTracker.IntegrationTests;
 
@@ -18,9 +24,9 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
         {
             var testConfig = new Dictionary<string, string?>
             {
-                { "JwtSettings:SigningKey", "SuperSecretTestingSigningKeyForJwtValidation1234567890!" },
-                { "JwtSettings:Issuer", "InsuranceClaimsTracker-IntegrationTests" },
-                { "JwtSettings:Audience", "InsuranceClaimsTracker-IntegrationApp" },
+                { "JwtSettings:SigningKey", TestTokenHelper.DefaultSigningKey },
+                { "JwtSettings:Issuer", TestTokenHelper.DefaultIssuer },
+                { "JwtSettings:Audience", TestTokenHelper.DefaultAudience },
                 { "JwtSettings:AccessTokenExpirationMinutes", "20" }
             };
             config.AddInMemoryCollection(testConfig);
@@ -48,6 +54,39 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
             });
 
             services.AddScoped<IApplicationDbContext>(sp => sp.GetRequiredService<ApplicationDbContext>());
+
+            // Configure JWT Bearer options to match TestTokenHelper
+            services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
+            {
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(TestTokenHelper.DefaultSigningKey)),
+                    ValidateIssuer = true,
+                    ValidIssuer = TestTokenHelper.DefaultIssuer,
+                    ValidateAudience = true,
+                    ValidAudience = TestTokenHelper.DefaultAudience,
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero,
+                    RoleClaimType = ClaimTypes.Role,
+                    NameClaimType = ClaimTypes.NameIdentifier
+                };
+            });
+
+            var jwtGenDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(IJwtTokenGenerator));
+            if (jwtGenDescriptor != null)
+            {
+                services.Remove(jwtGenDescriptor);
+            }
+
+            var testJwtSettings = Options.Create(new JwtSettings
+            {
+                SigningKey = TestTokenHelper.DefaultSigningKey,
+                Issuer = TestTokenHelper.DefaultIssuer,
+                Audience = TestTokenHelper.DefaultAudience,
+                AccessTokenExpirationMinutes = 20
+            });
+            services.AddSingleton<IJwtTokenGenerator>(new JwtTokenGenerator(testJwtSettings));
         });
     }
 }

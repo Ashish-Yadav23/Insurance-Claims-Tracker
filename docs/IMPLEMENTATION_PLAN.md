@@ -169,15 +169,22 @@ Implement policy retrieval, admin policy issuance, and customer claim submission
    - Initial `ClaimHistory` creation logic.
 
 ### Acceptance Criteria
-- Attempting to submit a claim for an amount exceeding coverage throws validation error.
-- Attempting to submit a claim with an incident date outside the policy period fails validation.
-- Customers cannot access or submit claims against policies they do not own.
-- All Phase 4 unit tests pass.
+- Public or customer users cannot issue policies (HTTP 403 Forbidden).
+- Admins can issue policies to valid customers with validated coverage amounts and date ranges (HTTP 201 Created).
+- Duplicate policy numbers return HTTP 409 Conflict.
+- Customers can view only their own policies; accessing other customer policies returns HTTP 404 Not Found.
+- Customers can submit claims only against their own active policies within the coverage date range (HTTP 201 Created).
+- Attempting to submit a claim for an amount exceeding coverage or with invalid incident date returns HTTP 400 Bad Request.
+- Submitted claims receive initial status `Submitted` and an atomic initial `ClaimHistory` entry with the customer ID.
+- Customers cannot access other customers' claims (HTTP 404 Not Found); Admins can view claims across customers.
+- Unauthenticated requests return HTTP 401 Unauthorized.
+- All Phase 4 unit and integration tests pass.
 
 ### Verification Commands
 ```bash
-dotnet build
-dotnet test tests/InsuranceClaimsTracker.UnitTests --filter "FullyQualifiedName~Policy|FullyQualifiedName~Claim"
+dotnet restore InsuranceClaimsTracker.sln
+dotnet build InsuranceClaimsTracker.sln
+dotnet test InsuranceClaimsTracker.sln
 ```
 
 ---

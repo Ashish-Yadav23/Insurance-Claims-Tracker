@@ -131,6 +131,7 @@ Issues a new insurance policy for a customer.
 - **Request Body**:
   ```json
   {
+    "policyNumber": "POL-AUTO-001",
     "customerId": 1,
     "policyType": "Auto",
     "coverageAmount": 50000.00,
@@ -139,9 +140,11 @@ Issues a new insurance policy for a customer.
   }
   ```
 - **Responses**:
-  - `201 Created`: Created Policy DTO with generated `policyNumber`.
-  - `400 Bad Request`: `EndDate <= StartDate` or `CoverageAmount <= 0`.
-  - `404 Not Found`: `CustomerId` does not exist.
+  - `201 Created`: Created Policy DTO.
+  - `400 Bad Request`: `EndDate <= StartDate`, `CoverageAmount <= 0`, or target customer not found / not a Customer.
+  - `401 Unauthorized`: Missing or invalid token.
+  - `403 Forbidden`: Authenticated user does not possess the `Admin` role.
+  - `409 Conflict`: Policy number already exists.
 
 ---
 
@@ -181,9 +184,11 @@ Files a new claim against an active policy.
   }
   ```
 - **Responses**:
-  - `201 Created`: Created Claim DTO with status `Submitted`. Automatically writes initial append-only `ClaimHistory` entry.
-  - `400 Bad Request`: Incident date outside policy window, or claim amount exceeds coverage.
-  - `404 Not Found`: Policy not found or does not belong to customer.
+  - `201 Created`: Created Claim DTO with status `Submitted`. Automatically writes initial append-only `ClaimHistory` entry (`PreviousStatus: null`, `NewStatus: Submitted`, `ChangedById: currentUserId`).
+  - `400 Bad Request`: Incident date outside active policy coverage window, incident date in future, or claim amount exceeds coverage.
+  - `401 Unauthorized`: Missing or invalid authentication token.
+  - `403 Forbidden`: Authenticated user does not possess `Customer` role.
+  - `404 Not Found`: Policy not found or does not belong to the authenticated customer.
 
 ---
 

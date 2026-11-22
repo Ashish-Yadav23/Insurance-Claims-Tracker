@@ -2,6 +2,7 @@ using System.Text;
 using InsuranceClaimsTracker.Application.Common.Interfaces;
 using InsuranceClaimsTracker.Infrastructure.Authentication;
 using InsuranceClaimsTracker.Infrastructure.Persistence;
+using InsuranceClaimsTracker.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,6 +55,9 @@ public static class DependencyInjection
 
         services.AddSingleton<IPasswordHasherService, PasswordHasherService>();
         services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
+
+        services.AddHttpContextAccessor();
+        services.AddScoped<ICurrentUserService, CurrentUserService>();
 
         return services;
     }
